@@ -1,0 +1,64 @@
+=== START: Mon Mar 23 10:14:34 PM UTC 2026 ===
+--- 60_10_30 imbalanced ---
+
+================================================================================
+DANISH HATE SPEECH DETECTION - FINE-TUNING PIPELINE
+================================================================================
+Started: 2026-03-23 22:14:37
+
+Models: ['llama', 'mistral', 'gemma', 'qwen']
+Patterns: ['vanilla_qa', 'choice_qa', 'cloze', 'cot', 'target', 'illocutionary', 'functional', 'definition', 'victim_perspective', 'expert_moderator', 'rules']
+Split: 60_10_30, Variant: imbalanced
+
+================================================================================
+STEP 1: LOADING PRE-SPLIT DATA
+================================================================================
+  Loaded 60_10_30/imbalanced: train=1973, val=329, test=987
+
+Dataset: imbalanced_60_10_30
+  Train: 1973 samples (hate: 255)
+  Val:   329 samples (hate: 42)
+  Test:  987 samples (hate: 128)
+
+Output: results/danish_hate_results/finetuning_results/imbalanced_60_10_30_20260323_221437
+
+================================================================================
+STEP 2: PATTERN-BY-PATTERN TRAINING & EVALUATION
+================================================================================
+
+[1/11] Processing: vanilla_qa
+
+======================================================================
+PATTERN: VANILLA_QA
+======================================================================
+MODEL: LLAMA
+
+Preparing data for llama...
+  Using template for: llama
+  Train: 1973 | Val: 329 | Test: 987
+Training SFT for llama...
+
+======================================================================
+SFT TRAINING: LLAMA - VANILLA_QA
+======================================================================
+
+Loading base model: meta-llama/Meta-Llama-3.1-8B-Instruct
+Setting up tokenizer for: meta-llama/Meta-Llama-3.1-8B-Instruct
+No pad_token found, setting to eos_token
+Tokenizer ready (pad_token='<|eot_id|>')
+Loading checkpoint shards:   0%|          | 0/4 [00:00<?, ?it/s]Loading checkpoint shards:  25%|██▌       | 1/4 [00:00<00:01,  1.60it/s]Loading checkpoint shards:  50%|█████     | 2/4 [00:01<00:01,  1.64it/s]Loading checkpoint shards:  75%|███████▌  | 3/4 [00:01<00:00,  1.65it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:01<00:00,  2.36it/s]Loading checkpoint shards: 100%|██████████| 4/4 [00:01<00:00,  2.03it/s]
+✓ Model loaded successfully
+  GPU Memory: 14.96GB allocated, 14.96GB reserved
+LoRA config created:
+Rank (r): 16
+Alpha: 32
+Target modules: {'gate_proj', 'k_proj', 'up_proj', 'o_proj', 'down_proj', 'q_proj', 'v_proj'}
+  Trainable parameters: 41,943,040 (0.52%)
+
+Starting SFT training
+Adding EOS to train dataset:   0%|          | 0/1973 [00:00<?, ? examples/s]Adding EOS to train dataset: 100%|██████████| 1973/1973 [00:00<00:00, 51578.20 examples/s]
+Tokenizing train dataset:   0%|          | 0/1973 [00:00<?, ? examples/s]Tokenizing train dataset:  19%|█▉        | 374/1973 [00:00<00:00, 3707.68 examples/s]Tokenizing train dataset:  43%|████▎     | 857/1973 [00:00<00:00, 3368.62 examples/s]Tokenizing train dataset:  70%|███████   | 1385/1973 [00:00<00:00, 3259.78 examples/s]Tokenizing train dataset:  91%|█████████▏| 1802/1973 [00:00<00:00, 3536.55 examples/s]Tokenizing train dataset: 100%|██████████| 1973/1973 [00:00<00:00, 3422.99 examples/s]
+Truncating train dataset:   0%|          | 0/1973 [00:00<?, ? examples/s]Truncating train dataset: 100%|██████████| 1973/1973 [00:00<00:00, 178409.84 examples/s]
+Adding EOS to eval dataset:   0%|          | 0/329 [00:00<?, ? examples/s]Adding EOS to eval dataset: 100%|██████████| 329/329 [00:00<00:00, 49984.64 examples/s]
+Tokenizing eval dataset:   0%|          | 0/329 [00:00<?, ? examples/s]Tokenizing eval dataset: 100%|██████████| 329/329 [00:00<00:00, 3651.26 examples/s]
+Truncating eval dataset:   0%|          | 0/329 [00:00<?, ? examples/s]Truncating eval dataset: 100%|██████████| 329/329 [00:00<00:00, 255683.90 examples/s]

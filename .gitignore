@@ -1,0 +1,41 @@
+# Data files
+# data/
+# *.csv
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Models (if cached locally)
+models/
+*.bin
+*.safetensors
+*.gguf
+
+# Results and outputs
+results/
+outputs/
+*.png
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
