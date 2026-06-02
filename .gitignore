@@ -39,3 +39,8 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
+# Excluded: contains real author names/emails (keep repo pseudonymous)
+src/paper.md
+
+# Internal notes, not for publication
+bug_fix.md

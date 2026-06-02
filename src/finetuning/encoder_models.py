@@ -37,10 +37,27 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForMaskedLM,
     AutoTokenizer,
+    PreTrainedTokenizerFast,
     TrainingArguments,
     Trainer,
     EarlyStoppingCallback,
 )
+
+
+def _robust_tokenizer_load(model_name):
+    """Load a tokenizer with a fallback for transformers 5.x XLM-R bug.
+
+    transformers 5.7.0 has a regression where XLMRobertaTokenizer(Fast) crashes
+    with "argument 'vocab': 'dict' object cannot be converted to 'Sequence'"
+    because the slow path calls Unigram(vocab=dict, ...) which the newer
+    tokenizers library doesn't accept. PreTrainedTokenizerFast.from_pretrained
+    skips that path and just loads tokenizer.json directly.
+    """
+    try:
+        return AutoTokenizer.from_pretrained(model_name, trust_remote_code=True, use_fast=True)
+    except (TypeError, ValueError) as e:
+        print(f"  AutoTokenizer load failed ({e!r}); retrying with PreTrainedTokenizerFast")
+        return PreTrainedTokenizerFast.from_pretrained(model_name)
 from peft import LoraConfig, get_peft_model, TaskType
 from datasets import Dataset, DatasetDict
 
@@ -87,7 +104,7 @@ _ZERO_SHOT_PATTERNS = {
         "negative": "b",
     },
     "cloze": {
-        "template": "Givet udsagnet, er dette udsagn hadefuldt eller neutralt? Forudsig venligst [MASK] token, du kan kun svare hadefuldt eller neutralt.\n\nNu din tur:\nUdsagn: {text}\nSvar: Det er et [MASK] udsagn.",
+        "template": "Givet udsagnet, er dette udsagn hadefuldt eller neutralt? Du kan kun svare hadefuldt eller neutralt.\n\nNu din tur:\nUdsagn: {text}\nSvar: Det er et [MASK] udsagn.",
         "positive": "hadefuldt",
         "negative": "neutralt",
     },
@@ -148,7 +165,7 @@ def setup_encoder(model_name, training=True, num_labels=2):
     print(f"\nLoading encoder: {model_name}")
     _cleanup_gpu()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = _robust_tokenizer_load(model_name)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
@@ -165,7 +182,7 @@ def _setup_mlm(model_name):
     print(f"\nLoading MLM encoder: {model_name}")
     _cleanup_gpu()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    tokenizer = _robust_tokenizer_load(model_name)
     model = AutoModelForMaskedLM.from_pretrained(model_name, trust_remote_code=True)
 
     model = model.to(DEVICE)
@@ -174,6 +191,30 @@ def _setup_mlm(model_name):
     n_params = sum(p.numel() for p in model.parameters())
     print(f"  MLM model loaded: {n_params:,} parameters")
     return model, tokenizer
+
+# TEXT-SIDE TRUNCATION
+# BERT models are hard-capped at 512 positional embeddings, so we cannot
+# eliminate truncation. But we CAN truncate the input text rather than the
+# prompt, guaranteeing that the mask token is never cut off.
+def _max_text_tokens(template, tokenizer, mask_token, n_mask_repeats=1,
+                     trailing_period=True, max_length=512, buffer=8):
+    """How many text tokens fit alongside the template+mask within max_length."""
+    mask_str = " ".join([mask_token] * max(1, n_mask_repeats))
+    skeleton = template.format(text="")
+    # match the prompt construction in Path A / Path B
+    if "[MASK]" in skeleton:
+        skeleton = skeleton.replace("[MASK]", mask_str)
+    else:
+        skeleton = skeleton.rstrip() + " " + mask_str + ("." if trailing_period else "")
+    overhead = len(tokenizer.encode(skeleton, add_special_tokens=True))
+    return max(8, max_length - overhead - buffer)
+
+def _truncate_text(text, tokenizer, max_text_tokens):
+    """Token-truncate text from the end so it fits in max_text_tokens."""
+    ids = tokenizer.encode(text, add_special_tokens=False)
+    if len(ids) <= max_text_tokens:
+        return text
+    return tokenizer.decode(ids[:max_text_tokens], skip_special_tokens=True)
 
 # MULTI-TOKEN MLM SCORING
 def _score_multi_token_candidate(
@@ -285,20 +326,36 @@ def evaluate_encoder_mlm(
         pos_cap_ids_sp = tokenizer.encode(" " + pos_word.capitalize(), add_special_tokens=False)
         neg_cap_ids_sp = tokenizer.encode(" " + neg_word.capitalize(), add_special_tokens=False)
 
-        is_multi_token = len(pos_ids) > 1 or len(neg_ids) > 1
+        # Bug 1 fix: check ALL four spellings for multi-subword tokenization,
+        # not just the lowercase forms. Otherwise bert-base-multilingual-cased's
+        # "Nej" -> ['Ne','##j'] gets silently scored as just the 'Ne' subword.
+        all_pos_seqs = [pos_ids, pos_cap_ids, pos_ids_sp, pos_cap_ids_sp]
+        all_neg_seqs = [neg_ids, neg_cap_ids, neg_ids_sp, neg_cap_ids_sp]
+        is_multi_token = any(len(s) > 1 for s in all_pos_seqs + all_neg_seqs)
 
         print(
             f"\n  MLM zero_shot/{pattern_name}: "
             f"pos='{pos_word}'({len(pos_ids)} subwords) ids={pos_ids}, "
             f"neg='{neg_word}'({len(neg_ids)} subwords) ids={neg_ids}"
             f"\n    space-prefixed: pos_sp={pos_ids_sp}, neg_sp={neg_ids_sp}"
+            f"\n    cap: pos_cap={pos_cap_ids}, neg_cap={neg_cap_ids}"
             f"{' [MULTI-TOKEN]' if is_multi_token else ''}"
         )
 
         # ---- PATH A: Single-token ----
         if not is_multi_token:
-            pos_id, neg_id = pos_ids[0], neg_ids[0]
-            pos_cap_id, neg_cap_id = pos_cap_ids[0], neg_cap_ids[0]
+            # Bug 4 fix: deduplicate token IDs. For SentencePiece models,
+            # encode("ja") and encode(" ja") often return the same ID, so the
+            # old code was double-counting the same token's probability.
+            pos_id_set = {pos_ids[0], pos_cap_ids[0], pos_ids_sp[0], pos_cap_ids_sp[0]}
+            neg_id_set = {neg_ids[0], neg_cap_ids[0], neg_ids_sp[0], neg_cap_ids_sp[0]}
+            print(f"    Path A pos token IDs: {sorted(pos_id_set)}  neg token IDs: {sorted(neg_id_set)}")
+
+            # Pre-truncate texts so the mask never falls off the 512-token end
+            max_text_tokens = _max_text_tokens(
+                pattern["template"], tokenizer, mask_token, n_mask_repeats=1,
+            )
+            print(f"    Path A: max text tokens = {max_text_tokens}")
 
             predictions = []
             truncated_count = 0
@@ -308,11 +365,16 @@ def evaluate_encoder_mlm(
                 batch_texts = texts[i : i + batch_size]
                 prompts = []
                 for text in batch_texts:
+                    text = _truncate_text(text, tokenizer, max_text_tokens)
                     prompt = pattern["template"].format(text=text)
                     if pattern_name == "cloze":
                         prompt = prompt.replace("[MASK]", mask_token)
                     else:
-                        prompt = prompt.rstrip() + " " + mask_token
+                        # Bug 2 fix: append a trailing period so the mask is
+                        # NOT at end-of-sequence. XLM-R / ScandiBERT collapses
+                        # to predicting </s> at the mask position when there
+                        # is no following context.
+                        prompt = prompt.rstrip() + " " + mask_token + "."
                     prompts.append(prompt)
 
                 inputs = tokenizer(
@@ -333,18 +395,8 @@ def evaluate_encoder_mlm(
                         continue
                     mask_pos = mask_positions[-1].item()
                     probs = logits[j, mask_pos].softmax(dim=-1)
-                    p_pos = probs[pos_id].item() + probs[pos_cap_id].item()
-                    p_neg = probs[neg_id].item() + probs[neg_cap_id].item()
-                    # Add space-prefixed token probs (fixes ScandiBERT/SentencePiece models
-                    # where "▁ja" is a different token than "ja")
-                    if len(pos_ids_sp) == 1:
-                        p_pos += probs[pos_ids_sp[0]].item()
-                    if len(pos_cap_ids_sp) == 1:
-                        p_pos += probs[pos_cap_ids_sp[0]].item()
-                    if len(neg_ids_sp) == 1:
-                        p_neg += probs[neg_ids_sp[0]].item()
-                    if len(neg_cap_ids_sp) == 1:
-                        p_neg += probs[neg_cap_ids_sp[0]].item()
+                    p_pos = sum(probs[t].item() for t in pos_id_set)
+                    p_neg = sum(probs[t].item() for t in neg_id_set)
                     # Debug first 3 samples of first batch
                     if i == 0 and j < 3:
                         print(f"    [DEBUG sample {j}] p_pos={p_pos:.6f} p_neg={p_neg:.6f} → pred={1 if p_pos > p_neg else 0}")
@@ -355,13 +407,23 @@ def evaluate_encoder_mlm(
 
         # ---- PATH B: Multi-token ----
         else:
+            # Pre-truncate text so the largest candidate's masks fit in 512.
+            max_subwords = max(len(s) for s in all_pos_seqs + all_neg_seqs)
+            max_text_tokens = _max_text_tokens(
+                pattern["template"], tokenizer, mask_token, n_mask_repeats=max_subwords,
+            )
+            print(f"    Path B: max text tokens = {max_text_tokens} (worst-case {max_subwords} masks)")
+
             prompts_with_placeholder = []
             for text in texts:
+                text = _truncate_text(text, tokenizer, max_text_tokens)
                 prompt = pattern["template"].format(text=text)
                 if pattern_name == "cloze":
                     prompt = prompt.replace("[MASK]", "<<ANSWER>>")
                 else:
-                    prompt = prompt.rstrip() + " <<ANSWER>>"
+                    # Bug 2 fix: trailing period so the masks are not at
+                    # end-of-sequence (same reason as Path A).
+                    prompt = prompt.rstrip() + " <<ANSWER>>."
                 prompts_with_placeholder.append(prompt)
 
             pos_scores = _score_multi_token_candidate(
@@ -408,17 +470,22 @@ def evaluate_encoder_mlm(
                     fb_pos_cap_id = tokenizer.encode("Ja", add_special_tokens=False)[0]
                     fb_neg_cap_id = tokenizer.encode("Nej", add_special_tokens=False)[0]
 
+                    fb_max_text_tokens = _max_text_tokens(
+                        pattern["template"], tokenizer, mask_token, n_mask_repeats=1,
+                    )
                     predictions = []
                     for i_fb in tqdm(range(0, len(texts), batch_size),
                                      desc=f"  FALLBACK {pattern_name}"):
                         batch_texts = texts[i_fb : i_fb + batch_size]
                         fb_prompts = []
                         for text in batch_texts:
+                            text = _truncate_text(text, tokenizer, fb_max_text_tokens)
                             prompt = pattern["template"].format(text=text)
                             if pattern_name == "cloze":
                                 prompt = prompt.replace("[MASK]", mask_token)
                             else:
-                                prompt = prompt.rstrip() + " " + mask_token
+                                # Bug 2 fix: trailing period
+                                prompt = prompt.rstrip() + " " + mask_token + "."
                             fb_prompts.append(prompt)
 
                         fb_inputs = tokenizer(
@@ -607,9 +674,19 @@ def train_encoder(model_name, train_df, val_df, test_df, model_key, output_dir, 
 def evaluate_encoder(model_name, test_df, adapter_path=None, batch_size=32):
     """Evaluate encoder on test set using classification head."""
     if adapter_path and os.path.exists(adapter_path):
-        model = AutoModelForSequenceClassification.from_pretrained(adapter_path)
-        tokenizer = AutoTokenizer.from_pretrained(adapter_path)
-        print(f"  Loaded fine-tuned encoder from {adapter_path}")
+        # Load the base model fresh, then attach the LoRA adapter via PeftModel.
+        # We avoid AutoModelForSequenceClassification.from_pretrained(adapter_path)
+        # because in transformers 5.7.0 it calls a peft API
+        # (_maybe_shard_state_dict_for_tp) that does not exist in peft 0.18.0.
+        from peft import PeftModel
+        base_model = AutoModelForSequenceClassification.from_pretrained(
+            model_name, num_labels=2, trust_remote_code=True,
+        )
+        model = PeftModel.from_pretrained(base_model, adapter_path)
+        tokenizer = _robust_tokenizer_load(adapter_path)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        print(f"  Loaded fine-tuned encoder (LoRA) from {adapter_path}")
     else:
         model, tokenizer = setup_encoder(model_name, training=False)
         print(f"  Using untrained encoder (zero-shot baseline)")
