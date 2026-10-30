@@ -1,7 +1,3 @@
-# Data files
-# data/
-# *.csv
-
 # Python
 __pycache__/
 *.py[cod]
@@ -10,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 *.egg-info/
 dist/
 build/
@@ -28,6 +25,7 @@ results/
 outputs/
 *.png
 *.pdf
+!pipeline.png
 
 # IDE
 .vscode/
@@ -39,8 +37,7 @@ outputs/
 # OS
 .DS_Store
 Thumbs.db
-# Excluded: contains real author names/emails (keep repo pseudonymous)
-src/paper.md
 
-# Internal notes, not for publication
+# Working notes, not part of the release
+src/paper.md
 bug_fix.md

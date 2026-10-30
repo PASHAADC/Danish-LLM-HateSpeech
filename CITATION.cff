@@ -1,0 +1,50 @@
+cff-version: 1.2.0
+message: "If you use this code or these splits, please cite the paper below and the DKHate corpus."
+title: "Danish-LLM-HateSpeech"
+type: software
+repository-code: "https://github.com/PASHAADC/Danish-LLM-HateSpeech"
+license: LicenseRef-MIT-with-Use-Restrictions
+authors:
+  - family-names: "Adl Zarabi"
+    given-names: "Elnur"
+    affiliation: "Texas A&M University-Corpus Christi"
+  - family-names: "Kumar"
+    given-names: "Amit"
+    affiliation: "Texas A&M University-Corpus Christi"
+  - family-names: "Singh"
+    given-names: "Adi"
+    affiliation: "Mississippi State University"
+  - family-names: "Nelson"
+    given-names: "Sierra"
+    affiliation: "Mississippi State University"
+  - family-names: "Stubbs-Richardson"
+    given-names: "Megan"
+    affiliation: "University of Miami"
+  - family-names: "Ji"
+    given-names: "Taoran"
+    affiliation: "Texas A&M University-Corpus Christi"
+preferred-citation:
+  type: conference-paper
+  title: "On the Effectiveness and Limitations of Open-Weight LLMs for Low-Resource Offensive Language Detection in Danish"
+  authors:
+    - family-names: "Adl Zarabi"
+      given-names: "Elnur"
+    - family-names: "Kumar"
+      given-names: "Amit"
+    - family-names: "Singh"
+      given-names: "Adi"
+    - family-names: "Nelson"
+      given-names: "Sierra"
+    - family-names: "Stubbs-Richardson"
+      given-names: "Megan"
+    - family-names: "Ji"
+      given-names: "Taoran"
+  collection-title: "Proceedings of the 2026 IEEE International Conference on Big Data (BigData)"
+  publisher:
+    name: "IEEE"
+  year: 2026
+  conference:
+    name: "IEEE BigData 2026"
+    city: "Phoenix"
+    region: "AZ"
+    country: "US"
